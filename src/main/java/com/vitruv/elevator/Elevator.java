@@ -1,147 +1,151 @@
 package com.vitruv.elevator;
 
-import lombok.Getter;
-import lombok.Setter;
+import java.util.ArrayList;
 
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.NavigableSet;
+public class Elevator implements Runnable {
 
-@Getter
-@Setter
-public class Elevator implements Runnable{
-    // 작동여부
-    private boolean operating;
-    private int id;
-    // 현재 상태
-    private ElevatorState elevatorState;
-    // 현재위치한 층
-    private int currentFloor;
-    // 엘리베이터가 이동하는 동한 지나가는 floor들
-    private NavigableSet<Integer> floorStops;
-    // 엘리베이터의 움직임 저장
-    public Map<ElevatorState, NavigableSet<Integer>> floorStopsMap;
+	private int elevatorID;
 
-    public Elevator(int id){
-        this.id = id;
-        setOperating(true);
-    }
+	private int currentFloor;
 
-    public void setOperating(boolean state){
-        this.operating = state;
+	private int numPassengers;
 
-        if(!state){
-            setElevatorState(ElevatorState.MAINTENANCE);
-            this.floorStops.clear();
-        } else {
-            setElevatorState(ElevatorState.STATIONARY);
-            this.floorStopsMap = new LinkedHashMap<>();
+	private int totalLoadedPassengers;
 
-            // To let controller know that this elevator is ready to serve
-            ElevatorController.updateElevatorLists(this);
-        }
+	private int totalUnloadedPassengers;
 
-        setCurrentFloor(0);
-    }
+	private ArrayList<ElevatorEvent> moveQueue;
 
-    public void move(){
-        synchronized (ElevatorController.getInstance()){ // Synchronized over the ElevatorController singleton.
-            Iterator<ElevatorState> iter = floorStopsMap.keySet().iterator();
+	private int[] passengerDestinations;
 
-            while(iter.hasNext()){
-                elevatorState = iter.next();
+	private BuildingManager BM;
 
-                // Get the floors that elevator will pass in the requested direction
-                floorStops = floorStopsMap.get(elevatorState);
-                iter.remove();
-                Integer currFlr = null;
-                Integer nextFlr = null;
+	private boolean down;
+	
 
-                // Start moving the elevator
-                while (!floorStops.isEmpty()) {
+	public Elevator(int elevatorID, BuildingManager manager){
 
-                    if (elevatorState.equals(ElevatorState.UP)) {
-                        currFlr = floorStops.pollFirst();
-                        nextFlr = floorStops.higher(currFlr);
+		this.elevatorID = elevatorID;
+		BM = manager;
+		currentFloor = 0;
+		numPassengers = 0;
+		totalLoadedPassengers = 0;
+		totalUnloadedPassengers = 0;
+		moveQueue = new ArrayList<>();
+		passengerDestinations = new int[5];
+		down = true;
+	}
 
-                    } else if (elevatorState.equals(ElevatorState.DOWN)) {
-                        currFlr = floorStops.pollLast();
-                        nextFlr = floorStops.lower(currFlr);
-                    } else {
-                        return;
-                    }
+	@Override
+	public void run(){
+		while(!Thread.interrupted()){
+			if (moveQueue.isEmpty() && numPassengers == 0) nextFloor();
+			if (!moveQueue.isEmpty()) {
+				ElevatorEvent cur = moveQueue.get(0);
+				if (cur.getExpectedArrival() == SimClock.getTime()){
+					down = true;
+					currentFloor = cur.getDestination();
+					int passengers = passengerDestinations[currentFloor];
 
-                    setCurrentFloor(currFlr);
+					if (numPassengers > 0){
+							System.out.println("Time:  "+ SimClock.getTime()+ "  Elevator "+ elevatorID + " : "+currentFloor+" 층 도착 "+ passengers +" 명의 손님 내림 ");
+							unloadPassengers(currentFloor,passengers);
+							BM.elevatorArrival(elevatorID, currentFloor, passengers);
 
-                    if (nextFlr != null) {
-                        // This helps us in picking up any request that might come
-                        // while we are on the way.
-                        generateIntermediateFloors(currFlr, nextFlr);
-                    } else {
-                        setElevatorState(ElevatorState.STATIONARY);
-                        ElevatorController.updateElevatorLists(this);
-                    }
+						    moveQueue.remove(0);	
+					
+					} else {
 
-                    System.out.println("Elevator ID " + this.id + " | Current floor - " + getCurrentFloor() + " | next move - " + getElevatorState());
+						pickUpPassengersUp(10);
+						if (down == true){
+							pickUpPassengersDown(10);
+						}
+						System.out.println("Time:  "+ SimClock.getTime()+ "  Elevator "+ elevatorID + " : "+currentFloor+" 층 도착 "+ numPassengers+ " 명의 손님 탑승 ");
+						moveQueue.remove(0);
+						BM.setapproachingElevator(currentFloor, -1);	
+						
+					}
+				}
+			}
+		}
+	}
 
-                    try {
-                        Thread.sleep(1000); // Let people get off the elevator :P
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
 
-            try {
-                // Wait till ElevatorController has scanned the state of all elevators.
-                // This helps us to serve any intermediate requests that might come
-                // while elevators are on their respective paths.
-                ElevatorController.getInstance().wait();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
+	public void pickUpPassengersUp(int period){
+		for (int j = currentFloor+1; j < 5;j++){
+			 int requestpassengers = BM.getCurrentRequest(currentFloor, j);
+			 if (requestpassengers > 0){
+				 period =  period + 5 * Math.abs(j-currentFloor);
+				 createElevatorEvent(j, SimClock.getTime()+period);
+				 down = false;
+				 loadPassengers(j,requestpassengers);
+				 BM.setCurrentRequest(currentFloor, j, 0); 
+				
+				 
+			 }
+			 
+		}
+	}
 
-    }
+	public void pickUpPassengersDown(int period){
+		for (int j = currentFloor-1; j >= 0; j--){
+			 int requestpassengers = BM.getCurrentRequest(currentFloor, j);
+			 if (requestpassengers > 0){
+				 period =  period + 5 * Math.abs(j-currentFloor);
+				 createElevatorEvent(j, SimClock.getTime()+period);
+				 loadPassengers(j,requestpassengers);
+				 BM.setCurrentRequest(currentFloor, j, 0);
+				
+			 }
+		}
+	}
 
-    private void generateIntermediateFloors(int initial, int target){
+	public void nextFloor(){
+		int nextfloor = BM.locateRequest(elevatorID);
+		if(nextfloor != -1){
+			int period = 5*Math.abs(nextfloor-currentFloor);
+			System.out.println("Time:  "+ SimClock.getTime()+ "  Elevator "+ elevatorID + " : 이동중 " + currentFloor + "층에서 "+nextfloor+" 층으로 ");
+			createElevatorEvent(nextfloor, SimClock.getTime()+period);
+			
+		}	
+	}
 
-        if(initial==target){
-            return;
-        }
+	public void printElevatorState()
+	{
+		System.out.println("Elevator ID: " + elevatorID);
+		System.out.println("이 엘리베이터를 탑승한 승객 수 " + totalLoadedPassengers);
+		for (int i = 0; i < 5; i++){
+			System.out.println("이 엘리베이터를 이용하여 " + i + " 층에서 " + BM.getelevatorArrival(elevatorID, i) + " 명 내림 ");
+		}
+		System.out.println("총 내린 승객 수 : " + totalUnloadedPassengers);
+		System.out.println("현재 승객 수 : " + numPassengers);
+	}
 
-        if(Math.abs(initial-target) == 1){
-            return;
-        }
+	public void createElevatorEvent(int d, int t){
+		ElevatorEvent EE = new ElevatorEvent(d,t);
+		addMoveQueue(EE);
+	}
 
-        int n = 1;
-        if(target-initial<0){
-            // This means with are moving DOWN
-            n = -1;
-        }
+	public void addMoveQueue(ElevatorEvent ee){
+		moveQueue.add(ee);
+	}
 
-        while(initial!=target){
-            initial += n;
-            if(!floorStops.contains(initial)) {
-                floorStops.add(initial);
-            }
-        }
-    }
+	public void loadPassengers(int floor,int num){
+		numPassengers+=num;
+		totalLoadedPassengers+=num;
+		passengerDestinations[floor]+=num;
+		
+	}
+	
+	public void unloadPassengers(int floor,int num){
+		numPassengers-=num;
+		totalUnloadedPassengers+=num;
+		passengerDestinations[floor]-=num;
+	}
+	
 
-    @Override
-    public void run() {
-        while(true){
-            if(isOperating()){
-                move();
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            } else {
-                break;
-            }
-        }
-    }
+	
+	
+	
+
 }
