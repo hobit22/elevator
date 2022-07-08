@@ -67,7 +67,7 @@ public class  BuildingManager {
 			{
 				System.out.println("Floor " + i + ":");
 				floors[i].printFloorStates();
-				System.out.print("The total number of passengers who exited from elevators 0, 1, 2, 3, and 4 are, respectively: ");
+				System.out.print("각 엘리베이터에서 이 층으로 온 손님의 수 : ");
 				for (int j = 0; j < 5; j++){
 					System.out.print(floors[i].getArrivedPassengers(j)+" ");
 					
